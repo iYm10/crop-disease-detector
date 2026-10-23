@@ -182,6 +182,43 @@ input::placeholder,textarea::placeholder {color:#62735e!important;-webkit-text-f
 }
 [data-baseweb="popover"] li {background:#fff;color:#203d31}
 [data-baseweb="popover"] li:hover {background:#e5efdc!important;color:#193e2b!important}
+/* Sidebar sensitivity select: readable before click, on hover, and while open. */
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    background-color:#ffffff!important;
+    color:#203d31!important;
+    border:1.5px solid #9cad91!important;
+    border-radius:12px!important;
+    min-height:46px;
+    box-shadow:0 2px 6px #203d310b!important;
+    cursor:pointer!important;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div:hover {
+    background-color:#edf5e8!important;
+    border-color:#245b43!important;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"]:focus-within > div {
+    background-color:#ffffff!important;
+    border-color:#245b43!important;
+    box-shadow:0 0 0 3px #245b4324!important;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] :is(div,span,input,svg) {
+    color:#203d31!important;
+    -webkit-text-fill-color:#203d31!important;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] svg {
+    fill:currentColor!important;
+}
+/* Dropdown menu is mounted outside the sidebar in some Streamlit versions. */
+[data-baseweb="popover"] [role="listbox"],
+[data-baseweb="popover"] [data-baseweb="menu"] {
+    background:#ffffff!important;
+    color:#203d31!important;
+}
+[data-baseweb="popover"] [role="option"] :is(div,span,p) {
+    color:#203d31!important;
+    -webkit-text-fill-color:#203d31!important;
+}
+
 [data-baseweb="radio"],[data-baseweb="checkbox"] {color:#203d31!important}
 [data-baseweb="radio"]>div:first-of-type,[data-baseweb="checkbox"]>span:first-of-type {
     background-color:#fff!important;border-color:#819576!important;
