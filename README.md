@@ -99,7 +99,7 @@ See [`REPORT.md`](REPORT.md) for details, per-class analysis, and discussion.
 - [ ] Android app and Arabic/English interface
 
 ## Author
-**Yahya Majrashi**, Information Technology and Security, Jazan University
+**Yahya Majrashi**, Diploma in Data Science and AI at Tuwaiq Academy
 
 ## References
 - Hughes & Salathé (2015), *An open access repository of images on plant health*
