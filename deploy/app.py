@@ -1,5 +1,6 @@
 import html
 import io
+import base64
 import hashlib
 import json
 import threading
@@ -10,7 +11,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
-import tensorflow as tf
 from PIL import Image, ImageOps
 
 BASE = Path(__file__).parent
@@ -68,236 +68,270 @@ T = {
     },
 }
 
-# ---------------------------------------------------------------- model
+# ---------------------------------------------------------------- model: original preprocessing, lazy resource loading
 @st.cache_resource
 def load():
-    it = tf.lite.Interpreter(model_path=str(BASE / "model.tflite"))
+    import tensorflow as tf
+    it = tf.lite.Interpreter(model_path=str(BASE / 'model.tflite'))
     it.allocate_tensors()
-    with open(BASE / "labels.json") as f:
-        return it, json.load(f), threading.Lock()
+    with open(BASE / 'labels.json', encoding='utf-8') as f:
+        labels = json.load(f)
+    return it, labels, threading.Lock()
 
-try:
-    interp, labels, lock = load()
-except Exception as exc:
-    st.error("تعذر تحميل النموذج. ضع model.tflite و labels.json بجانب ملف التطبيق. / Model files could not be loaded.")
-    with st.expander("Technical details"):
-        st.code(str(exc))
-    st.stop()
-inp, out = interp.get_input_details()[0], interp.get_output_details()[0]
 
 def predict(img):
-    img = ImageOps.exif_transpose(img).convert("RGB").resize((IMG, IMG))
-    x = np.asarray(img, dtype="float32")[None]
-    t0 = time.perf_counter()
+    it, labels, lock = load()
+    inp, out = it.get_input_details()[0], it.get_output_details()[0]
+    x = np.asarray(img.convert('RGB').resize((IMG, IMG)), dtype='float32')[None]
+    start = time.perf_counter()
     with lock:
-        interp.set_tensor(inp["index"], x)
-        interp.invoke()
-        p = interp.get_tensor(out["index"])[0].copy()
-    return p, (time.perf_counter() - t0) * 1000
+        it.set_tensor(inp['index'], x)
+        it.invoke()
+        scores = it.get_tensor(out['index'])[0].copy()
+    return scores, (time.perf_counter() - start) * 1000, labels
+
 
 def pretty(name):
-    crop, cond = name.split("___")
-    return crop.replace("_", " ").strip(), cond.replace("_", " ").strip()
-
-# ---------------------------------------------------------------- interface
-
-def tr(en, ar):
-    return ar if lang == "ar" else en
+    crop, _, condition = name.partition('___')
+    return crop.replace('_', ' ').strip(), condition.replace('_', ' ').strip()
 
 
-def esc(value):
+def e(value):
     return html.escape(str(value))
 
 
-for key, default in {"history": [], "seen": set(), "prediction": None, "upload_id": 0}.items():
+for key, default in {'history': [], 'result': None, 'upload_key': 0, 'rotation': 0, 'lang': 'ar'}.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
-with st.sidebar:
-    st.markdown("### 🌿 CROP DOCTOR")
-    lang = st.radio("Language / اللغة", ["en", "ar"], format_func=lambda x: "العربية" if x == "ar" else "English", horizontal=True, key="language")
-    t = T[lang]
-    st.caption(tr("YOUR PLANT HEALTH COMPANION", "رفيقك لصحة النبات"))
-    st.divider()
-    st.subheader(t["settings"])
-    conf_t = st.slider(t["conf"], .50, .99, .80, .01, help=t["conf_h"])
-    ent_t = st.slider(t["ent"], .30, 2., 1., .05, help=t["ent_h"])
-    st.caption(tr("Adjust thresholds to see the current result update instantly.", "حرّك المؤشرات وشاهد كيف تتغير حالة النتيجة مباشرةً."))
-    st.divider()
-    st.markdown(f"**{t['tips']}**")
-    for tip in t["tips_l"]:
-        st.markdown(f"✓ {tip}")
-    st.divider()
-    st.caption(t["by"])
+lang = st.session_state.lang
 
-st.markdown('''<style>
-.stApp {background:var(--background-color)}
-.block-container {max-width:1240px;padding-top:2rem;padding-bottom:2rem}
-h1,h2,h3 {letter-spacing:-.035em}
-.hero {position:relative;overflow:hidden;background:linear-gradient(115deg,#102e29,#1c5245);padding:44px;border-radius:26px;color:#fff;margin:12px 0 24px}
-.hero:after {content:'❧';position:absolute;right:3%;top:-65px;font-size:320px;line-height:1.3;color:#c7dfab;opacity:.10;pointer-events:none}
-.hero h1 {font-size:clamp(2.2rem,5vw,3.7rem);line-height:1.1;color:#fff!important;margin:16px 0;max-width:800px;position:relative;z-index:1}
-.hero p {color:#d3e5da;max-width:640px;line-height:1.8;margin:0;position:relative;z-index:1}
-.eyebrow {font-size:.72rem;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#c3dea1}
-.pills {display:flex;gap:9px;flex-wrap:wrap;margin-top:24px}
-.pill {font-size:.76rem;border:1px solid #ffffff30;padding:7px 13px;border-radius:30px;color:#edf4e9;background:#ffffff08}
-.card {border:1px solid #829a842e;background:var(--secondary-background-color);border-radius:20px;padding:25px;margin-bottom:16px;animation:arrive .35s ease-out}
-.kicker {font-size:.72rem;letter-spacing:.13em;text-transform:uppercase;opacity:.65;margin-bottom:10px}
-.empty {text-align:center;padding:55px 24px;border:1px dashed #829a8466;border-radius:20px;margin-top:16px;background:var(--secondary-background-color)}
-.empty-icon {font-size:3.7rem;margin-bottom:12px}
-.empty h3 {margin:0 0 10px}.empty p {opacity:.65;font-size:.95rem}
-.badge {display:inline-block;border-radius:30px;padding:7px 13px;font-size:.8rem;font-weight:700;background:var(--tint);color:var(--ink)}
-.result-main {display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:23px}
-.result-main h2 {margin:0 0 8px;font-size:1.9rem;overflow-wrap:anywhere}.result-main p {opacity:.7;margin:0}
-.ring {flex-shrink:0;width:112px;height:112px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--ink) var(--angle),#8a9c8830 0);direction:ltr}
-.ring-center {width:92px;height:92px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--secondary-background-color)}
-.ring strong {font-size:1.6rem}.ring small {font-size:.65rem;opacity:.7}
-.track {height:8px;border-radius:99px;background:#80918022;overflow:hidden;margin:9px 0 20px}.fill {height:100%;border-radius:99px;animation:grow .55s ease-out}
-.pred-row {display:flex;justify-content:space-between;gap:12px;font-size:.88rem}.pred-row span {overflow-wrap:anywhere}
-.note {font-size:.9rem;line-height:1.7;margin-top:20px;padding-top:16px;border-top:1px solid #829a8430}
-.footer {text-align:center;opacity:.55;font-size:.75rem;margin-top:30px}
-[data-testid="stFileUploader"] {border-radius:18px;overflow:hidden}
-[data-testid="stImage"] img {border-radius:18px;max-height:430px;object-fit:contain}
-[data-testid="stMetric"] {padding:18px;border:1px solid #829a8433;border-radius:16px;background:var(--secondary-background-color)}
-.stButton button,.stDownloadButton button {border-radius:11px;transition:transform .18s}.stButton button:hover,.stDownloadButton button:hover {transform:translateY(-2px)}
-button[kind="primary"] {background:#257357;color:white;border-color:#257357}
-[data-baseweb="tab-list"] {gap:24px;margin-bottom:16px}
-@keyframes arrive {from {opacity:0;transform:translateY(8px)}to {opacity:1;transform:translateY(0)}}
-@keyframes grow {from {max-width:0}to {max-width:100%}}
-@media(prefers-reduced-motion:reduce) {* {animation:none!important;transition:none!important}}
-@media(max-width:640px) {.hero {padding:28px 22px}.card {padding:20px}.ring {width:94px;height:94px}.ring-center {width:76px;height:76px}.result-main h2 {font-size:1.4rem}}
-</style>''', unsafe_allow_html=True)
-st.markdown("""<style>
-.stApp {background:radial-gradient(ellipse at 90% 0%,#29443620,transparent 42%),var(--background-color)}
-.block-container {max-width:1320px;padding-top:1.7rem}
-.brandline {display:flex;justify-content:space-between;align-items:center;font-size:.78rem;font-weight:800;letter-spacing:.12em;margin:0 3px 22px;gap:15px}
-.brandline small {font-size:.61rem;opacity:.5;font-weight:500;letter-spacing:.08em}.edition {font-size:.6rem;opacity:.55;letter-spacing:.16em}
-.hero {display:grid;grid-template-columns:1.35fr 1fr;align-items:center;padding:48px 48px 38px;border:1px solid #41604b;border-radius:28px;background:radial-gradient(ellipse at 90% 30%,#284d37 0%,#112e26 50%,#0c211c 100%);box-shadow:0 20px 60px #0b291c18;margin-bottom:0;min-height:390px}
-.hero:after {display:none}.hero h1 {font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:clamp(2.7rem,4.2vw,4.4rem);letter-spacing:-.045em;line-height:1.12;margin:23px 0;color:#eff1db!important}.hero p {font-size:.95rem;max-width:480px;color:#b6cbbd;line-height:1.9}
-.hero-copy {position:relative;z-index:1}.eyebrow {font-size:.63rem;color:#d0dfaa;display:flex;align-items:center;gap:8px;letter-spacing:.18em}
-.live-dot {display:inline-block;height:6px;width:6px;border-radius:50%;background:#d0dfaa;box-shadow:0 0 0 5px #d0dfaa0f}
-.pill {font-size:.68rem;color:#dce6cf;border-color:#a2bc8630;background:#a2bc8608;padding:8px 12px}
-.botanical {position:relative;min-width:0}.botanical svg {width:100%;max-height:325px;filter:drop-shadow(0 25px 18px #00000025);animation:botanical-in 1s ease-out}.specimen-label {display:flex;justify-content:space-between;font-family:monospace;font-size:.59rem;letter-spacing:.09em;color:#b6c99d;margin:0 35px;gap:12px}
-.journey {display:flex;align-items:center;justify-content:space-around;padding:24px 22px;border:1px solid #84947830;border-top:0;border-radius:0 0 22px 22px;margin:0 16px 30px;background:var(--secondary-background-color)}
-.journey>div {display:flex;gap:14px;align-items:center}.journey b {font-size:1.2rem;font-family:Georgia,serif;color:#6a8863;font-weight:400}.journey span {font-size:.85rem;font-weight:650}.journey small {display:block;font-size:.67rem;font-weight:400;opacity:.55;margin-top:4px}.journey i {opacity:.2;font-style:normal}
-.card {border-radius:22px;padding:28px;box-shadow:0 8px 30px #0c241008;border-color:#84947830}.kicker {font-size:.65rem;letter-spacing:.16em}
-.empty {border-radius:22px;padding:40px 26px;background:radial-gradient(circle at 50% 20%,#a5b88112,transparent 70%),var(--secondary-background-color);border-color:#8f9f7640;min-height:260px}.empty-icon {display:grid;place-items:center;width:78px;height:78px;border:1px solid #8f9f7635;border-radius:50%;margin:0 auto 23px;background:#8f9f7610;font-size:2.4rem}.empty h3 {font-size:1.25rem;letter-spacing:-.025em}.empty p {max-width:330px;margin:10px auto;font-size:.85rem;line-height:1.9}
-[data-baseweb="tab-list"] {gap:8px;padding:5px;border-radius:14px;background:var(--secondary-background-color);width:fit-content;border:1px solid #84947825}
-[data-baseweb="tab"] {border-radius:10px;padding:10px 23px;height:auto;font-weight:600;font-size:.85rem}
-[data-baseweb="tab"][aria-selected="true"] {background:#24513e;color:#f1f1df!important}
+def tr(en, ar):
+    return ar if lang == 'ar' else en
+
+t = T[lang]
+
+# A single visual system; all artwork and fonts work without external requests.
+CSS = '''
+<style>
+:root {--paper:#f6f7f2;--panel:#ffffff;--ink:#203d31;--muted:#6f7d71;--line:#dfe5d9;--green:#245b43;--lime:#d9edb5}
+.stApp {background:var(--paper);color:var(--ink)}
+[data-testid="stHeader"] {background:#f6f7f2e8}
+.block-container {max-width:1320px;padding:2rem 2.2rem 3rem}
+[data-testid="stSidebar"] {background:#ecf0e6;border-inline-end:1px solid var(--line)}
+[data-testid="stSidebar"] * {color:var(--ink)}
+[data-testid="stMarkdownContainer"],label,[data-testid="stWidgetLabel"],h1,h2,h3 {color:var(--ink)}
+[data-testid="stCaptionContainer"] {color:var(--muted)}
+h1,h2,h3 {letter-spacing:-.035em} h3 {font-size:1.18rem}
+[data-baseweb="input"],[data-baseweb="select"]>div,[data-baseweb="textarea"] {background:#fff;color:var(--ink);border-color:var(--line);border-radius:12px}
+input,textarea {color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+[data-testid="stExpander"] {background:#fff;border-color:var(--line);border-radius:15px}
+[data-testid="stFileUploaderDropzone"] {background:#f0f4e9;border:1px dashed #9ba98b;border-radius:18px;padding:25px 18px;color:var(--ink)}
+[data-testid="stFileUploaderDropzone"] * {color:var(--ink)}
+.stButton button,.stDownloadButton button {border-radius:12px;background:#fff;border:1px solid var(--line);color:var(--ink);min-height:44px;transition:transform .15s,box-shadow .15s}
+.stButton button:hover,.stDownloadButton button:hover {border-color:#809a6c;transform:translateY(-2px);box-shadow:0 5px 12px #22492b10}
+.stButton button:focus-visible,.stDownloadButton button:focus-visible {outline:3px solid #98b66b;outline-offset:3px}
+button[kind="primary"] {background:#245b43!important;border-color:#245b43!important;color:#fff!important;min-height:50px}
+button[kind="primary"] p {color:#fff!important}
+button:disabled {opacity:.45}
+.topbar {display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px}
+.logo {display:flex;align-items:center;gap:10px;font-weight:800;font-size:.9rem;letter-spacing:.05em}
+.logo-icon {background:var(--green);color:var(--lime);border-radius:12px;width:37px;height:37px;display:grid;place-items:center;font-size:1.5rem}
+.topnote {font-size:.68rem;color:var(--muted);letter-spacing:.08em}
+.hero {display:grid;grid-template-columns:1.3fr 1fr;align-items:center;background:#133b2b;border-radius:28px;overflow:hidden;min-height:340px;margin-bottom:22px;box-shadow:0 12px 35px #153e2210}
+.hero-copy {padding:40px 44px;position:relative;z-index:1}
+.eyebrow {font-size:.64rem;letter-spacing:.18em;text-transform:uppercase;color:#bbd0a5;display:flex;align-items:center;gap:9px}
+.dot {width:6px;height:6px;border-radius:50%;background:#d2e8a3;box-shadow:0 0 0 5px #d2e8a310;display:inline-block}
+.hero h1 {color:#f2f4e5!important;font-family:Georgia,serif;font-size:clamp(2.8rem,4.1vw,4.1rem);font-weight:400;line-height:1.12;margin:22px 0 17px;letter-spacing:-.045em}
+.hero p {color:#c4d3bf;font-size:.91rem;line-height:1.85;max-width:460px;margin:0}
+.tags {display:flex;gap:8px;flex-wrap:wrap;margin-top:23px}.tags span {font-size:.65rem;padding:7px 12px;border:1px solid #acc39740;border-radius:50px;color:#dce7cb}
+.art {position:relative;padding:25px 25px 20px;background:radial-gradient(ellipse at center,#54704460,transparent 70%)}
+.art svg {width:100%;height:270px;filter:drop-shadow(0 20px 20px #001b1740)}
+.art-caption {display:flex;justify-content:space-between;color:#b7c99c;font-family:monospace;font-size:.57rem;letter-spacing:.1em;padding:0 30px}
+.stats {display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:0 0 26px}.stat {background:#fff;border:1px solid var(--line);border-radius:16px;padding:17px 21px;display:flex;align-items:center;gap:14px}.stat-icon {background:#edf3e5;color:#608245;width:39px;height:39px;display:grid;place-items:center;border-radius:12px;font-size:1.2rem}.stat strong {display:block;font-size:1.1rem;font-weight:650}.stat small {font-size:.69rem;color:var(--muted)}
+[data-baseweb="tab-list"] {background:#e9eee2;border:1px solid #dde5d5;border-radius:14px;padding:5px;gap:5px;width:fit-content;margin-bottom:20px}
+[data-baseweb="tab"] {padding:10px 24px;height:auto;border-radius:10px;color:#60715e}
+[data-baseweb="tab"][aria-selected="true"] {background:#fff;color:#214a34;box-shadow:0 2px 7px #193c1510}
 [data-baseweb="tab-highlight"],[data-baseweb="tab-border"] {display:none}
-[data-testid="stSidebar"] {border-inline-end:1px solid #84947830}
-[data-testid="stFileUploaderDropzone"] {border:1px dashed #8d9e7066;border-radius:17px;padding:24px 18px;background:var(--secondary-background-color)}
-button[kind="primary"] {background:linear-gradient(120deg,#285d46,#183f31);border:1px solid #476e4e;min-height:49px;box-shadow:0 6px 18px #143d2920;letter-spacing:.01em}
-.stButton button,.stDownloadButton button {min-height:44px;border-radius:12px}.stButton button:focus-visible,.stDownloadButton button:focus-visible {outline:3px solid #b6c993;outline-offset:3px}
-.ring {width:124px;height:124px;box-shadow:0 0 0 8px #80918008}.ring-center {width:103px;height:103px}.ring strong {font-size:1.9rem;font-weight:500}.badge {font-size:.75rem}.track {height:6px;margin-top:12px;margin-bottom:24px}
-.footer {border-top:1px solid #84947830;padding-top:22px;letter-spacing:.06em}
-@keyframes botanical-in {from {opacity:0;transform:translateY(12px) rotate(-5deg)}to {opacity:1;transform:translateY(0) rotate(0)}}
-@media(max-width:850px) {.hero {padding:32px 28px;grid-template-columns:1.4fr 1fr}.hero h1 {font-size:2.8rem}.specimen-label {margin:0 8px;font-size:.48rem}.edition {display:none}}
-@media(max-width:640px) {.hero {grid-template-columns:1fr;padding:30px 24px}.hero h1 {font-size:2.75rem}.botanical {display:none}.journey {margin:0 8px 22px;padding:18px 12px;gap:8px}.journey>div {gap:7px}.journey small {display:none}.journey span {font-size:.7rem}.journey i {display:none}.brandline {font-size:.65rem}.brandline small {font-size:.5rem}.card {padding:21px}.ring {width:102px;height:102px}.ring-center {width:84px;height:84px}[data-baseweb="tab"] {padding:9px 13px}}
-@media(prefers-reduced-motion:reduce) {.botanical svg {animation:none}}
-</style>""", unsafe_allow_html=True)
+.section-head {display:flex;align-items:center;gap:12px;margin:6px 0 18px}.step {border:1px solid #cedac1;color:#617c4d;border-radius:9px;padding:5px 8px;font-size:.67rem;font-family:monospace}.section-head h3 {margin:0;font-size:1.12rem}.section-head small {display:block;font-size:.72rem;color:var(--muted);margin-top:5px}
+.card {background:#fff;border:1px solid var(--line);border-radius:21px;padding:25px;margin:0 0 16px;animation:enter .3s ease-out}
+.kicker {font-size:.64rem;letter-spacing:.13em;color:#76876c;text-transform:uppercase;margin-bottom:15px}
+.empty {min-height:310px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;background:radial-gradient(circle at 50% 30%,#eaf1de,transparent 70%),#fff;border:1px solid var(--line);border-radius:21px;padding:30px}
+.orbit {position:relative;display:grid;place-items:center;width:116px;height:116px;border:1px dashed #b1c397;border-radius:50%;margin-bottom:22px}.orbit:before {content:'';position:absolute;inset:13px;border:1px solid #d6e1c6;border-radius:50%}.orbit span {font-size:2rem;color:#6d8a50}.empty h3 {margin:0 0 10px}.empty p {font-size:.83rem;color:var(--muted);max-width:300px;line-height:1.8;margin:0}
+.helper {background:#edf2e7;border-radius:14px;padding:17px 19px;font-size:.78rem;color:#637458;line-height:1.8;margin-top:15px}
+.badge {display:inline-flex;gap:8px;align-items:center;padding:7px 12px;border-radius:50px;background:var(--tint);color:var(--accent);font-size:.76rem;font-weight:700}
+.result-grid {display:flex;justify-content:space-between;align-items:center;gap:18px;margin:20px 0}.result-grid h2 {font-size:1.8rem;margin:0 0 8px;overflow-wrap:anywhere}.result-grid p {font-size:.84rem;color:var(--muted);margin:0;line-height:1.7}
+.ring {flex-shrink:0;width:120px;height:120px;display:grid;place-items:center;border-radius:50%;background:conic-gradient(var(--accent) var(--angle),#edf0e7 0);direction:ltr;box-shadow:0 0 0 7px #f8faf4}.ring-inner {width:101px;height:101px;border-radius:50%;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center}.ring strong {font-size:1.9rem;font-weight:500}.ring small {font-size:.63rem;color:var(--muted)}
+.advice {border-top:1px solid var(--line);padding-top:16px;font-size:.82rem;line-height:1.8;color:#6b7966}
+.prediction {display:flex;justify-content:space-between;gap:12px;font-size:.79rem}.prediction span {overflow-wrap:anywhere}.track {background:#edf1e7;height:7px;border-radius:20px;margin:10px 0 20px;overflow:hidden}.fill {height:100%;border-radius:20px;animation:fill .6s ease-out}
+.scan-image {background:#edf1e6;border:1px solid #dce4d1;border-radius:20px;overflow:hidden;position:relative;margin:14px 0}.scan-image img {display:block;width:100%;max-height:345px;object-fit:contain}.image-meta {display:flex;justify-content:space-between;font-family:monospace;font-size:.62rem;padding:12px 16px;color:#697c5c;border-top:1px solid #dce4d1}
+.journal {display:flex;justify-content:space-between;align-items:center;gap:16px}.journal h3 {margin:9px 0 5px}.journal small {color:var(--muted);font-size:.74rem}.journal-value {font-size:1.2rem;font-weight:650;color:#476b37;white-space:nowrap}
+.footer {display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding-top:20px;margin-top:30px;font-size:.67rem;color:#7d8b73}
+[data-testid="stMetric"] {border:1px solid var(--line);border-radius:16px;background:#fff;padding:17px;color:var(--ink)}
+@keyframes enter {from {opacity:0;transform:translateY(6px)}to {opacity:1;transform:translateY(0)}}
+@keyframes fill {from {max-width:0}to {max-width:100%}}
+@media(prefers-reduced-motion:reduce) {* {animation:none!important;transition:none!important}}
+@media(max-width:800px) {.hero-copy {padding:30px}.hero h1 {font-size:2.9rem}.art {padding:10px}.stats {gap:8px}.stat {padding:14px;gap:9px}.topnote {display:none}}
+@media(max-width:600px) {.block-container {padding:1.3rem 1rem}.hero {grid-template-columns:1fr}.hero-copy {padding:30px 25px}.art {display:none}.hero h1 {font-size:2.7rem}.stats {gap:6px}.stat {padding:12px 9px;display:block}.stat-icon {display:none}.stat strong {font-size:.95rem}.stat small {font-size:.6rem}[data-baseweb="tab"] {padding:8px 12px}.card {padding:20px}.ring {width:99px;height:99px}.ring-inner {width:83px;height:83px}.result-grid h2 {font-size:1.4rem}.footer {flex-direction:column}}
+</style>
+'''
+st.markdown(CSS, unsafe_allow_html=True)
+if lang == 'ar':
+    st.markdown('<style>.block-container,[data-testid="stSidebar"] {direction:rtl;text-align:right}.hero h1 {font-family:Tahoma,Arial,sans-serif;font-size:clamp(2.3rem,3.6vw,3.4rem);font-weight:700;line-height:1.48;letter-spacing:-.04em}.eyebrow,.kicker,.logo,.topnote {letter-spacing:0}</style>',unsafe_allow_html=True)
 
-if lang == "ar":
-    st.markdown('''<style>.block-container,[data-testid="stSidebar"] {direction:rtl;text-align:right}.hero:after {right:auto;left:3%}.eyebrow,.kicker {letter-spacing:0}.pred-row {direction:rtl}.hero h1 {font-family:Tahoma,Arial,sans-serif;font-weight:700;line-height:1.45;letter-spacing:-.04em;font-size:clamp(2.3rem,3.5vw,3.6rem)}.brandline,.edition,.journey,.eyebrow {letter-spacing:0}</style>''', unsafe_allow_html=True)
-
-# Botanical artwork is inline SVG: no external images, fonts or network requests.
-leaf_art = """<svg viewBox="0 0 440 360" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs><linearGradient id="leaf" x1="80" y1="260" x2="320" y2="40" gradientUnits="userSpaceOnUse"><stop stop-color="#22644d"/><stop offset="1" stop-color="#c8eaa0"/></linearGradient><radialGradient id="glow"><stop stop-color="#afd67d" stop-opacity=".2"/><stop offset="1" stop-color="#afd67d" stop-opacity="0"/></radialGradient></defs><circle cx="222" cy="180" r="172" fill="url(#glow)"/><g stroke="#bbd9a6" stroke-opacity=".16"><circle cx="222" cy="180" r="135"/><circle cx="222" cy="180" r="168" stroke-dasharray="3 10"/><path d="M20 180H425M222 10V350"/></g><path d="M127 279C73 170 145 72 330 48C349 203 261 295 127 279Z" fill="url(#leaf)"/><path d="M104 310L300 82M144 260L141 179M180 219L173 132M213 181L211 100M246 142L248 78M145 260L229 260M180 219L278 210M213 181L307 160M246 142L322 115" stroke="#e4f6bd" stroke-opacity=".5" stroke-width="2" stroke-linecap="round"/><path d="M87 95V70H112M330 286H355V261" stroke="#d2df91" stroke-width="2"/><circle cx="222" cy="180" r="7" fill="#e1f4b8"/><circle cx="222" cy="180" r="18" stroke="#e1f4b8" stroke-opacity=".6"/><g fill="#dcebc5"><circle cx="62" cy="190" r="3"/><circle cx="365" cy="112" r="3"/><circle cx="280" cy="325" r="3"/></g></svg>"""
-st.markdown(f'''<div class="brandline"><span>◈ &nbsp; CROP DOCTOR <small> / {tr("BOTANICAL INTELLIGENCE", "ذكاء نباتي")}</small></span><span class="edition">{tr("THE PLANT CARE STUDIO", "مساحة العناية بالنبات")}</span></div><div class="hero"><div class="hero-copy"><div class="eyebrow"><span class="live-dot"></span> {tr("A CLOSER LOOK AT NATURE", "نظرة أقرب إلى الطبيعة")}</div><h1>{tr("Every leaf.<br>A story worth reading.", "لكل ورقة حكاية.<br>اكتشف ما تقوله.")}</h1><p>{tr("Turn a leaf photo into a clearer understanding of your plant. Thoughtful AI insights, one scan at a time.", "حوّل صورة ورقة إلى فهم أوضح لصحة نباتك. قراءة ذكية، ونتائج واضحة، وخطوة أقرب للعناية الأفضل.")}</p><div class="pills"><span class="pill">✦ {tr("AI leaf analysis", "تحليل ذكي للأوراق")}</span><span class="pill">◉ {tr("Confidence-aware", "نتائج تراعي الثقة")}</span></div></div><div class="botanical">{leaf_art}<div class="specimen-label"><span>FOLIUM / 001</span><span>{tr("Nature, understood.", "الطبيعة، بوضوح.")}</span></div></div></div><div class="journey"><div><b>01</b><span>{tr("Capture", "التقط")}<small>{tr("One clear leaf", "ورقة واحدة واضحة")}</small></span></div><i>—</i><div><b>02</b><span>{tr("Discover", "اكتشف")}<small>{tr("Let AI take a look", "دع الذكاء الاصطناعي يقرأها")}</small></span></div><i>—</i><div><b>03</b><span>{tr("Understand", "افهم")}<small>{tr("Explore your results", "استكشف نتائج التحليل")}</small></span></div>''', unsafe_allow_html=True)
-
-tab1, tab2, tab3 = st.tabs([t['tab1'], t['tab2'], t['tab3']])
-with tab1:
-    left, right = st.columns([1, 1.12], gap="large")
-    with left:
-        st.markdown(f"### {tr('01 · Add your leaf', '01 · أضف صورة الورقة')}")
-        mode = st.radio(t['src'], ['upload', 'camera'], format_func=lambda x: t['up'] if x == 'upload' else t['cam'], horizontal=True, key='source')
-        file = st.file_uploader(t['up_l'], type=['jpg','jpeg','png'], key=f"upload_{st.session_state.upload_id}") if mode == 'upload' else st.camera_input(t['cam_l'], key=f"camera_{st.session_state.upload_id}")
-        img, raw = None, None
-        if file is not None:
-            raw = file.getvalue()
-            try:
-                img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB')
-                st.image(img, use_container_width=True)
-                st.caption(f"{img.width} × {img.height} px · {len(raw)/1024:.0f} KB")
-            except Exception:
-                st.error(tr('This image cannot be opened. Try another JPG or PNG.', 'تعذر فتح الصورة. جرّب صورة JPG أو PNG أخرى.'))
-        if img is None:
-            st.markdown(f'''<div class="empty"><div class="empty-icon">🌱</div><h3>{tr('Start with a single leaf', 'ابدأ بورقة واحدة')}</h3><p>{tr('Upload a clear photo or use your camera.', 'ارفع صورة واضحة أو استخدم الكاميرا.')}</p></div>''', unsafe_allow_html=True)
-        else:
-            if st.button(tr('Analyze leaf →', 'تحليل الورقة ←'), type='primary', use_container_width=True):
-                with st.spinner(tr('Examining your leaf…', 'جارٍ تحليل الورقة…')):
-                    p, ms = predict(img)
-                st.session_state.prediction = {'hash': hashlib.sha256(raw).hexdigest(), 'p': p, 'ms': ms}
-            if st.button(tr('Start a new scan', 'بدء فحص جديد'), use_container_width=True):
-                st.session_state.upload_id += 1
-                st.session_state.prediction = None
-                st.rerun()
-    with right:
-        st.markdown(f"### {tr('02 · Your plant insights', '02 · قراءة حالة النبات')}")
-        result = st.session_state.prediction
-        active = img is not None and result is not None and result['hash'] == hashlib.sha256(raw).hexdigest()
-        if not active:
-            st.markdown(f'''<div class="empty"><div class="empty-icon">◎</div><h3>{tr('A little insight goes a long way', 'خطوة صغيرة لفهم صحة نباتك')}</h3><p>{tr('Your result, confidence and closest matches will appear here after analysis.', 'بعد التحليل، ستظهر النتيجة ونسبة الثقة وأقرب التوقعات هنا.')}</p></div>''', unsafe_allow_html=True)
-        else:
-            p, ms = result['p'], result['ms']
-            order = p.argsort()[::-1][:3]
-            conf = float(p[order[0]])
-            ent = float(-(p * np.log(p + 1e-9)).sum())
-            crop, cond = pretty(labels[order[0]])
-            state = 'uncertain' if conf < conf_t or ent > ent_t else ('healthy' if cond.lower() == 'healthy' else 'disease')
-            color, tint, icon = {'healthy':('#368b59','#e3f3e6','✓'), 'disease':('#c45b42','#fae9e3','!'), 'uncertain':('#ab791b','#faf0d7','?')}[state]
-            advice = t['adv_u'] if state == 'uncertain' else t['adv_d'] if state == 'disease' else tr('Keep monitoring your plant for visible changes.', 'استمر في مراقبة النبات لأي تغيّرات ظاهرة.')
-            title = t['uncertain'] if state == 'uncertain' else crop
-            subtitle = (' · '.join([t['why_c']] if conf < conf_t else []) + (' · ' if conf < conf_t and ent > ent_t else '') + (t['why_e'] if ent > ent_t else '')) if state == 'uncertain' else cond
-            st.markdown(f'''<div class="card" style="--ink:{color};--tint:{tint};--angle:{conf*360:.2f}deg"><div class="kicker">{t['result']}</div><span class="badge">{icon} {t[state]}</span><div class="result-main"><div><h2>{esc(title)}</h2><p>{esc(subtitle)}</p></div><div class="ring"><div class="ring-center"><strong>{conf:.0%}</strong><small>{t['confl']}</small></div></div><div class="note">{advice}</div></div>''', unsafe_allow_html=True)
-            rows = ''
-            for k, i in enumerate(order):
-                label = ' · '.join(pretty(labels[i]))
-                rows += f'<div class="pred-row"><span>{k+1:02d} &nbsp; {esc(label)}</span><b>{float(p[i]):.1%}</b></div><div class="track"><div class="fill" style="width:{float(p[i])*100:.2f}%;background:{color if k==0 else "#7f9d8c"}"></div></div>'
-            st.markdown(f'<div class="card"><div class="kicker">{t["top3"]}</div>{rows}</div>', unsafe_allow_html=True)
-            with st.expander(t['details']):
-                st.write(f"Entropy: {ent:.3f} / {ent_t:.2f}")
-                st.write(f"{t['time']}: {ms:.0f} ms")
-                st.caption(tr('Confidence is a model score, not a guarantee of correctness.', 'الثقة درجة يعطيها النموذج وليست ضمانًا لصحة النتيجة.'))
-            report = {'crop':crop, 'condition':cond, 'confidence':round(conf,4), 'entropy':round(ent,4), 'status':state, 'confidence_threshold':conf_t, 'entropy_threshold':ent_t}
-            st.download_button(tr('↓ Download result', '↓ تحميل النتيجة'), json.dumps(report, ensure_ascii=False, indent=2), 'crop_doctor_result.json', 'application/json', use_container_width=True)
-            signature = (result['hash'], conf_t, ent_t)
-            if signature not in st.session_state.seen:
-                st.session_state.seen.add(signature)
-                st.session_state.history.append({'time':datetime.now().isoformat(timespec='seconds'), **report})
-
-with tab2:
-    st.markdown(f"### {tr('Your growing journal', 'سجل العناية بنباتاتك')}")
-    st.caption(tr('Session only. Each new image or threshold combination is recorded once.', 'سجل الجلسة الحالية فقط. تُحفظ كل صورة مع إعدادات حدودها مرة واحدة.'))
-    if not st.session_state.history:
-        st.info(t['hist_empty'])
+with st.sidebar:
+    st.markdown('### ◈ CROP DOCTOR')
+    st.caption(tr('A thoughtful space for healthier plants.', 'مساحة ذكية للعناية بصحة نباتاتك.'))
+    st.radio('Language / اللغة',['ar','en'],format_func=lambda x:'العربية' if x=='ar' else 'English',key='lang',horizontal=True)
+    st.divider()
+    st.markdown('#### '+tr('Analysis preferences','تفضيلات التحليل'))
+    preset=st.selectbox(tr('Sensitivity','حساسية التحليل'),['balanced','careful','custom'],format_func=lambda x:{'balanced':tr('Balanced','متوازن'),'careful':tr('More cautious','أكثر تحفظًا'),'custom':tr('Custom','تخصيص')}[x])
+    if preset == 'custom':
+        conf_t=st.slider(t['conf'],.50,.99,.80,.01)
+        ent_t=st.slider(t['ent'],.30,2.,1.,.05)
     else:
-        df = pd.DataFrame(st.session_state.history)
-        cols = st.columns(3)
-        for c, label, value in zip(cols, [tr('Recorded analyses','التحليلات المسجلة'),t['healthy'],t['uncertain']], [len(df),int((df.status=='healthy').sum()),int((df.status=='uncertain').sum())]):
-            c.metric(label,value)
-        search = st.text_input(tr('Search crop or condition','ابحث باسم المحصول أو الحالة'))
-        status = st.selectbox(tr('Filter status','تصفية الحالة'), ['all','healthy','disease','uncertain'], format_func=lambda x: tr('All results','كل النتائج') if x=='all' else t[x])
-        filtered = df.copy()
-        if search:
-            filtered = filtered[filtered.crop.str.contains(search,case=False,regex=False) | filtered.condition.str.contains(search,case=False,regex=False)]
-        if status != 'all':
-            filtered = filtered[filtered.status==status]
-        st.dataframe(filtered.iloc[::-1], hide_index=True, use_container_width=True)
-        st.download_button(t['dl'],filtered.to_csv(index=False).encode('utf-8-sig'),'crop_doctor_history.csv','text/csv')
-        confirm = st.checkbox(tr('Confirm clearing session history','تأكيد مسح سجل الجلسة'))
-        if st.button(t['clr'],disabled=not confirm):
-            st.session_state.history = []
-            # Keep signatures so the current visible result is not immediately re-added.
+        conf_t,ent_t=(.80,1.) if preset=='balanced' else (.90,.70)
+        st.caption(tr(f'Confidence ≥ {conf_t:.0%} · Entropy ≤ {ent_t:.2f}',f'الثقة ≥ {conf_t:.0%} · التشتت ≤ {ent_t:.2f}'))
+    st.caption(tr('Current results update with these preferences. Saved scans retain their original settings.','تتغير النتيجة الحالية مع هذه التفضيلات. يحتفظ السجل بإعدادات كل فحص وقت إجرائه.'))
+    with st.expander(tr('A better photo, a better start','صورة أفضل، بداية أفضل')):
+        for tip in t['tips_l']:
+            st.write('✓ '+tip)
+    st.divider()
+    st.caption(tr('Built by Yahya Majrashi','تطوير يحيى الماجرشي'))
+
+LEAF='''<svg viewBox="0 0 420 320" xmlns="http://www.w3.org/2000/svg" fill="none" aria-hidden="true"><defs><linearGradient id="lg" x1="100" y1="280" x2="315" y2="40" gradientUnits="userSpaceOnUse"><stop stop-color="#356849"/><stop offset="1" stop-color="#d9eeb4"/></linearGradient></defs><g stroke="#bdd29e" stroke-opacity=".2"><circle cx="210" cy="160" r="132"/><circle cx="210" cy="160" r="150" stroke-dasharray="2 9"/><path d="M20 160H400M210 12V310"/></g><path d="M123 265C64 161 144 56 313 39C339 190 256 282 123 265Z" fill="url(#lg)"/><g stroke="#e6f2c8" stroke-opacity=".6" stroke-width="1.6" stroke-linecap="round"><path d="M102 294L290 70M143 246L136 166M175 206L168 119M207 169L205 87M240 128L244 64M143 246L229 243M175 206L272 195M207 169L301 146M240 128L313 105"/></g><circle cx="210" cy="160" r="6" fill="#e0efbf"/><circle cx="210" cy="160" r="17" stroke="#e0efbf" stroke-opacity=".7"/><path d="M62 98V70H90M333 252H361V224" stroke="#c7db9c" stroke-width="2"/></svg>'''
+st.markdown(f'<div class="topbar"><div class="logo"><span class="logo-icon">❧</span>CROP DOCTOR</div><div class="topnote">{tr("BOTANICAL INTELLIGENCE / PERSONAL PLANT STUDIO","ذكاء نباتي / مساحتك للعناية بالنبات")}</div></div>',unsafe_allow_html=True)
+st.markdown(f'<div class="hero"><div class="hero-copy"><div class="eyebrow"><span class="dot"></span>{tr("SMALL SIGNS. MEANINGFUL INSIGHTS.","تفاصيل صغيرة. معرفة تصنع فرقًا.")}</div><h1>{tr("Healthy starts<br>with a closer look.","صحة نباتك تبدأ<br>بنظرة أقرب.")}</h1><p>{tr("Every leaf has something to tell you. Explore plant health with clear, confidence-aware AI insights.","لكل ورقة ما تقوله. اكتشف حالة نباتك بتحليل ذكي، ونتائج واضحة تعرف متى تكون غير متأكدة.")}</p><div class="tags"><span>✦ {tr("Leaf analysis","تحليل الأوراق")}</span><span>◉ {tr("38 model classes","38 فئة في النموذج")}</span></div></div><div class="art">{LEAF}<div class="art-caption"><span>FOLIUM / 001</span><span>OBSERVE · UNDERSTAND</span></div></div></div>',unsafe_allow_html=True)
+summary=st.empty()
+
+def draw_summary():
+    n=len(st.session_state.history)
+    healthy=sum(x['status']=='healthy' for x in st.session_state.history)
+    uncertain=sum(x['status']=='uncertain' for x in st.session_state.history)
+    values=[('⌁',n,tr('Scans this session','فحوصات الجلسة')),('❧',healthy,tr('Healthy results','نتائج سليمة')),('◎',uncertain,tr('Uncertain results','نتائج غير مؤكدة'))]
+    summary.markdown('<div class="stats">'+''.join(f'<div class="stat"><span class="stat-icon">{icon}</span><div><strong>{value:02d}</strong><small>{label}</small></div></div>' for icon,value,label in values)+'</div>',unsafe_allow_html=True)
+
+def heading(number,title,sub):
+    st.markdown(f'<div class="section-head"><span class="step">{number}</span><div><h3>{title}</h3><small>{sub}</small></div></div>',unsafe_allow_html=True)
+
+def classify(p,labels):
+    order=p.argsort()[::-1][:3]
+    conf=float(p[order[0]])
+    entropy=float(-(p*np.log(p+1e-9)).sum())
+    crop,cond=pretty(labels[int(order[0])])
+    status='uncertain' if conf<conf_t or entropy>ent_t else 'healthy' if cond.lower()=='healthy' else 'disease'
+    return order,conf,entropy,crop,cond,status
+
+scan_tab,journal_tab,about_tab=st.tabs([tr('◉  Plant scan','◉  فحص النبات'),tr('▤  My journal','▤  سجل الفحوصات'),tr('✧  Discover','✧  عن التجربة')])
+with scan_tab:
+    left,right=st.columns([1,1.06],gap='large')
+    img=None
+    signature=None
+    with left:
+        heading('01',tr('Meet your leaf','تعرّف على ورقتك'),tr('A clear photo is the best starting point.','صورة واضحة هي أفضل نقطة بداية.'))
+        mode=st.radio(tr('Image source','مصدر الصورة'),['upload','camera'],format_func=lambda x:tr('Upload photo','رفع صورة') if x=='upload' else tr('Use camera','استخدام الكاميرا'),horizontal=True,label_visibility='collapsed')
+        file=st.file_uploader(tr('Drop your leaf photo here','ضع صورة الورقة هنا'),type=['jpg','jpeg','png'],key=f'upload_{st.session_state.upload_key}') if mode=='upload' else st.camera_input(tr('Photograph one leaf','صوّر ورقة واحدة'),key=f'camera_{st.session_state.upload_key}')
+        if file:
+            try:
+                raw=file.getvalue()
+                img=ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB')
+                rotation=st.select_slider(tr('Rotate photo','تدوير الصورة'),options=[0,90,180,270],value=0,format_func=lambda x:f'{x}°',key=f'rotation_{hashlib.sha256(raw).hexdigest()[:12]}')
+                if rotation:
+                    img=img.rotate(-rotation,expand=True)
+                signature=hashlib.sha256(raw+str(rotation).encode()).hexdigest()
+                preview=img.copy();preview.thumbnail((900,700))
+                buf=io.BytesIO();preview.save(buf,format='JPEG',quality=88)
+                b64=base64.b64encode(buf.getvalue()).decode()
+                st.markdown(f'<div class="scan-image"><img alt="{tr("Uploaded leaf preview","معاينة الورقة المرفوعة")}" src="data:image/jpeg;base64,{b64}"><div class="image-meta"><span>{img.width} × {img.height} PX</span><span>{len(raw)/1024:.0f} KB · {rotation}°</span></div></div>',unsafe_allow_html=True)
+            except Exception:
+                img=None
+                st.error(tr('Unable to read this image. Try another JPG or PNG.','تعذر قراءة الصورة. جرّب صورة JPG أو PNG أخرى.'))
+        if img is None:
+            st.markdown(f'<div class="helper">☀ &nbsp; {tr("Natural light. One leaf. A simple background. Small details make your photo more useful.","إضاءة طبيعية، ورقة واحدة، وخلفية بسيطة. تفاصيل صغيرة تجعل صورتك أكثر فائدة.")}</div>',unsafe_allow_html=True)
+        analyze=st.button(tr('Analyze this leaf  →','تحليل هذه الورقة  ←'),type='primary',use_container_width=True,disabled=img is None)
+        if analyze:
+            try:
+                with st.spinner(tr('Reading your leaf…','جارٍ قراءة تفاصيل الورقة…')):
+                    scores,ms,labels=predict(img)
+                st.session_state.result={'signature':signature,'scores':scores,'ms':ms,'labels':labels}
+                _,conf,entropy,crop,cond,state=classify(scores,labels)
+                st.session_state.history.append({'time':datetime.now().isoformat(timespec='seconds'),'crop':crop,'condition':cond,'confidence':round(conf,4),'entropy':round(entropy,4),'status':state,'confidence_threshold':conf_t,'entropy_threshold':ent_t})
+            except Exception as exc:
+                st.session_state.result=None
+                st.error(tr('Analysis could not run. Check TensorFlow, model.tflite and labels.json.','تعذر تشغيل التحليل. تأكد من تثبيت TensorFlow ووجود model.tflite و labels.json بجانب التطبيق.'))
+                with st.expander(tr('Error details','تفاصيل الخطأ')):
+                    st.code(str(exc))
+        if file and st.button(tr('Start another scan','بدء فحص آخر'),use_container_width=True):
+            st.session_state.upload_key+=1
+            st.session_state.result=None
             st.rerun()
-with tab3:
-    st.markdown(f"### {t['how']}")
-    st.write(t['how_t'])
-    st.caption(tr('Metrics below are carried over from your original app; they have not been independently verified.', 'الأرقام التالية من التطبيق الأصلي، ولم تُتحقق بشكل مستقل.'))
-    for c, key, value in zip(st.columns(4),['m1','m2','m3','m4'],['95.9%','2.58 MB','92.0%','98.7%']):
-        c.metric(t[key],value)
-    st.markdown(f"### {t['lim']}")
-    for item in t['lim_t']:
-        st.write(f'• {item}')
-    st.info(tr('When hosted online, images are processed on the hosting server. Offline use applies to local installation with dependencies already installed.', 'عند استضافة التطبيق عبر الإنترنت، تُعالج الصور على خادم الاستضافة. العمل دون إنترنت يخص التشغيل المحلي بعد تثبيت المتطلبات.'))
-st.markdown(f'<div class="footer">🌿 {t["by"]} · Crop Doctor</div>',unsafe_allow_html=True)
+    with right:
+        heading('02',tr('A clearer picture','صورة أوضح لصحة النبات'),tr('Your results, explained simply.','نتائجك، بتفسير بسيط وواضح.'))
+        result=st.session_state.result
+        if img is None or result is None or result['signature']!=signature:
+            st.markdown(f'<div class="empty"><div class="orbit"><span>❧</span></div><h3>{tr("Ready when you are","جاهز عندما تكون جاهزًا")}</h3><p>{tr("Add a leaf photo, then start your scan. Your plant insights will appear right here.","أضف صورة ورقة وابدأ الفحص. ستظهر هنا حالة النبات ونسبة الثقة وأقرب الاحتمالات.")}</p></div>',unsafe_allow_html=True)
+            st.markdown(f'<div class="helper">✧ &nbsp; {tr("Uncertainty is useful information. The app holds back when a prediction is not clear enough.","عدم اليقين معلومة مهمة. يمتنع التطبيق عن الجزم عندما لا تكون النتيجة واضحة بما يكفي.")}</div>',unsafe_allow_html=True)
+        else:
+            order,conf,entropy,crop,cond,state=classify(result['scores'],result['labels'])
+            color,tint,icon={'healthy':('#39784d','#e8f3e5','✓'),'disease':('#b85939','#f9ebe1','!'),'uncertain':('#947322','#f8f1d9','?')}[state]
+            title=t['uncertain'] if state=='uncertain' else crop
+            subtitle=tr('Try a clearer photo to reduce uncertainty.','جرّب صورة أوضح لتقليل عدم اليقين.') if state=='uncertain' else cond
+            advice=t['adv_u'] if state=='uncertain' else t['adv_d'] if state=='disease' else tr('Keep observing your plant for changes.','استمر في مراقبة النبات لأي تغيّرات.')
+            st.markdown(f'<div class="card" style="--accent:{color};--tint:{tint};--angle:{conf*360:.2f}deg"><div class="kicker">{tr("YOUR PLANT REPORT","تقرير حالة النبات")}</div><span class="badge">{icon} {t[state]}</span><div class="result-grid"><div><h2>{e(title)}</h2><p>{e(subtitle)}</p></div><div class="ring"><div class="ring-inner"><strong>{conf:.0%}</strong><small>{t["confl"]}</small></div></div><div class="advice">{advice}</div></div>',unsafe_allow_html=True)
+            rows=''
+            for rank,i in enumerate(order):
+                value=float(result['scores'][i])
+                label=' · '.join(pretty(result['labels'][int(i)]))
+                rows+=f'<div class="prediction"><span>{rank+1:02d} &nbsp; {e(label)}</span><b>{value:.1%}</b></div><div class="track"><div class="fill" style="width:{value*100:.2f}%;background:{color if rank==0 else "#afc29b"}"></div></div>'
+            st.markdown(f'<div class="card"><div class="kicker">{t["top3"]}</div>{rows}</div>',unsafe_allow_html=True)
+            with st.expander(tr('Understand this result','افهم هذه النتيجة')):
+                st.write(tr('Confidence is the model’s score, not a guarantee of correctness.','الثقة درجة يعطيها النموذج وليست ضمانًا لصحة النتيجة.'))
+                st.write(f'{t["confl"]}: {conf:.1%} / {conf_t:.0%}')
+                st.write(f'Entropy: {entropy:.3f} / {ent_t:.2f}')
+                st.caption(f'{t["time"]}: {result["ms"]:.0f} ms')
+                if conf<conf_t: st.warning(t['why_c'])
+                if entropy>ent_t: st.warning(t['why_e'])
+            report={'crop':crop,'condition':cond,'confidence':conf,'entropy':entropy,'status':state,'confidence_threshold':conf_t,'entropy_threshold':ent_t}
+            st.download_button(tr('↓  Save this report','↓  حفظ هذا التقرير'),json.dumps(report,ensure_ascii=False,indent=2),'crop_doctor_report.json','application/json',use_container_width=True)
+
+with journal_tab:
+    heading('03',tr('Your plant journal','سجل نباتاتك'),tr('Every scan, in one calm space.','كل فحوصاتك في مساحة واحدة.'))
+    st.caption(tr('History lasts for this session. Export it to keep a copy. Repeating analysis creates a new entry.','السجل خاص بالجلسة الحالية. صدّره للاحتفاظ بنسخة. إعادة التحليل تضيف فحصًا جديدًا.'))
+    if not st.session_state.history:
+        st.markdown(f'<div class="empty"><div class="orbit"><span>▤</span></div><h3>{tr("Your story starts with a scan","تبدأ الحكاية بفحص")}</h3><p>{tr("Completed scans will appear here, ready to revisit or export.","ستظهر الفحوصات المكتملة هنا، لتراجعها أو تحفظها لاحقًا.")}</p></div>',unsafe_allow_html=True)
+    else:
+        df=pd.DataFrame(st.session_state.history)
+        a,b=st.columns([2,1])
+        query=a.text_input(tr('Search by crop or condition','ابحث بالمحصول أو الحالة'),placeholder=tr('Try tomato…','جرّب Tomato…'))
+        status=b.selectbox(tr('Show results','عرض النتائج'),['all','healthy','disease','uncertain'],format_func=lambda x:tr('All results','كل النتائج') if x=='all' else t[x])
+        filtered=df.copy()
+        if query:
+            filtered=filtered[filtered.crop.str.contains(query,case=False,regex=False)|filtered.condition.str.contains(query,case=False,regex=False)]
+        if status!='all':filtered=filtered[filtered.status==status]
+        view=st.radio(tr('Display','طريقة العرض'),['cards','table'],format_func=lambda x:tr('Cards','بطاقات') if x=='cards' else tr('Table','جدول'),horizontal=True)
+        if filtered.empty:st.info(tr('No matching scans.','لا توجد فحوصات مطابقة.'))
+        elif view=='table':st.dataframe(filtered.iloc[::-1],hide_index=True,use_container_width=True)
+        else:
+            for _,row in filtered.iloc[::-1].head(30).iterrows():
+                st.markdown(f'<div class="card journal"><div><div class="kicker">{e(row["time"])} · {t[row["status"]]}</div><h3>{e(row["crop"])}</h3><small>{e(row["condition"])}</small></div><div class="journal-value">{row["confidence"]:.0%}</div></div>',unsafe_allow_html=True)
+            if len(filtered)>30:st.caption(tr('Showing the latest 30. Use table view for all entries.','تُعرض أحدث 30 نتيجة. اختر الجدول لعرض جميع النتائج.'))
+        st.download_button(tr('↓  Export filtered history','↓  تصدير السجل المُصفّى'),filtered.to_csv(index=False).encode('utf-8-sig'),'crop_doctor_history.csv','text/csv')
+        with st.expander(tr('Manage history','إدارة السجل')):
+            confirm=st.checkbox(tr('I want to clear this session’s history','أريد مسح سجل هذه الجلسة'))
+            if st.button(t['clr'],disabled=not confirm):
+                st.session_state.history=[]
+                st.rerun()
+
+with about_tab:
+    heading('✧',tr('Thoughtful technology. Clear boundaries.','تقنية ذكية. وحدود واضحة.'),tr('Get to know the intelligence behind your scan.','تعرّف على التقنية وراء فحصك.'))
+    c1,c2=st.columns(2,gap='large')
+    with c1:
+        st.markdown(f'<div class="card"><div class="kicker">{tr("THE PROCESS","كيف تعمل التجربة")}</div><h3>{tr("From photo to insight","من الصورة إلى المعرفة")}</h3><p>{t["how_t"]}</p></div>',unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<div class="card"><div class="kicker">{tr("GOOD TO KNOW","من المهم معرفته")}</div><h3>{t["lim"]}</h3>'+''.join(f'<p>• {e(x)}</p>' for x in t['lim_t'])+'</div>',unsafe_allow_html=True)
+    with st.expander(tr('Original project metrics','مقاييس المشروع الأصلي')):
+        st.caption(tr('Values retained from the original app; not independently verified.','الأرقام من التطبيق الأصلي؛ لم تُتحقق بشكل مستقل.'))
+        for col,key,val in zip(st.columns(4),['m1','m2','m3','m4'],['95.9%','2.58 MB','92.0%','98.7%']):col.metric(t[key],val)
+    st.info(tr('Local installation can run offline once dependencies are installed. Online deployments process images on the hosting server.','يعمل التثبيت المحلي دون إنترنت بعد تثبيت المتطلبات. عند النشر على الإنترنت، تُعالج الصور على خادم الاستضافة.'))
+draw_summary()
+st.markdown(f'<div class="footer"><span>❧ &nbsp; CROP DOCTOR · {tr("Care begins with understanding.","العناية تبدأ بالفهم.")}</span><span>{t["by"]}</span></div>',unsafe_allow_html=True)
