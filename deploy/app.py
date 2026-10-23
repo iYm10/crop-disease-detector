@@ -1,9 +1,12 @@
 import json
+from pathlib import Path
+
 import numpy as np
 import streamlit as st
 import tensorflow as tf
 from PIL import Image, ImageOps
 
+BASE = Path(__file__).parent  # folder containing app.py, model.tflite, labels.json
 IMG = 224
 CONF_THRESHOLD = 0.80
 ENTROPY_MAX = 1.0
@@ -15,9 +18,10 @@ st.caption("Runs a compact model with no internet needed for inference. "
 
 @st.cache_resource
 def load():
-    it = tf.lite.Interpreter(model_path="model.tflite")
+    it = tf.lite.Interpreter(model_path=str(BASE / "model.tflite"))
     it.allocate_tensors()
-    return it, json.load(open("labels.json"))
+    with open(BASE / "labels.json") as f:
+        return it, json.load(f)
 
 interp, labels = load()
 inp, out = interp.get_input_details()[0], interp.get_output_details()[0]
