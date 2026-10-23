@@ -1,0 +1,4 @@
+tensorflow>=2.16
+tensorflow-datasets
+scikit-learn
+numpy<2
