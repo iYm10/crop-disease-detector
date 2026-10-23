@@ -114,12 +114,12 @@ t = T[lang]
 # A single visual system; all artwork and fonts work without external requests.
 CSS = '''
 <style>
-:root {--paper:#f6f7f2;--panel:#ffffff;--ink:#203d31;--muted:#6f7d71;--line:#dfe5d9;--green:#245b43;--lime:#d9edb5}
+:root {--paper:#f6f7f2;--panel:#ffffff;--ink:#203d31;--muted:#586a5c;--line:#dfe5d9;--green:#245b43;--lime:#d9edb5}
 .stApp {background:var(--paper);color:var(--ink)}
 [data-testid="stHeader"] {background:#f6f7f2e8}
 .block-container {max-width:1320px;padding:2rem 2.2rem 3rem}
 [data-testid="stSidebar"] {background:#ecf0e6;border-inline-end:1px solid var(--line)}
-[data-testid="stSidebar"] * {color:var(--ink)}
+[data-testid="stSidebar"] {color:var(--ink);color-scheme:light}
 [data-testid="stMarkdownContainer"],label,[data-testid="stWidgetLabel"],h1,h2,h3 {color:var(--ink)}
 [data-testid="stCaptionContainer"] {color:var(--muted)}
 h1,h2,h3 {letter-spacing:-.035em} h3 {font-size:1.18rem}
@@ -128,12 +128,83 @@ input,textarea {color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!im
 [data-testid="stExpander"] {background:#fff;border-color:var(--line);border-radius:15px}
 [data-testid="stFileUploaderDropzone"] {background:#f0f4e9;border:1px dashed #9ba98b;border-radius:18px;padding:25px 18px;color:var(--ink)}
 [data-testid="stFileUploaderDropzone"] * {color:var(--ink)}
-.stButton button,.stDownloadButton button {border-radius:12px;background:#fff;border:1px solid var(--line);color:var(--ink);min-height:44px;transition:transform .15s,box-shadow .15s}
-.stButton button:hover,.stDownloadButton button:hover {border-color:#809a6c;transform:translateY(-2px);box-shadow:0 5px 12px #22492b10}
-.stButton button:focus-visible,.stDownloadButton button:focus-visible {outline:3px solid #98b66b;outline-offset:3px}
+/* Explicit widget states keep native dark-theme defaults out of this light UI. */
+.stApp {color-scheme:light}
+:is(.stButton,.stDownloadButton,[data-testid="stFileUploaderDropzone"],[data-testid="stCameraInput"]) button,
+button[kind="secondary"],button[kind="tertiary"] {
+    background:#fff!important;color:#203d31!important;border:1px solid #a7b7a2!important;
+    border-radius:12px;min-height:44px;transition:background-color .15s,border-color .15s,box-shadow .15s;
+}
+:is(.stButton,.stDownloadButton,[data-testid="stFileUploaderDropzone"],[data-testid="stCameraInput"]) button:hover:not(:disabled),
+button[kind="secondary"]:hover:not(:disabled),button[kind="tertiary"]:hover:not(:disabled) {
+    background:#e5efdc!important;color:#193e2b!important;border-color:#52734b!important;
+    box-shadow:0 3px 10px #22492b10;
+}
+:is(.stButton,.stDownloadButton,[data-testid="stFileUploaderDropzone"],[data-testid="stCameraInput"]) button:active:not(:disabled),
+button[kind="secondary"]:active:not(:disabled),button[kind="tertiary"]:active:not(:disabled) {
+    background:#d6e5ca!important;color:#193e2b!important;border-color:#245b43!important;
+}
 button[kind="primary"] {background:#245b43!important;border-color:#245b43!important;color:#fff!important;min-height:50px}
-button[kind="primary"] p {color:#fff!important}
-button:disabled {opacity:.45}
+button[kind="primary"]:hover:not(:disabled) {background:#194832!important;border-color:#194832!important;color:#fff!important}
+button[kind="primary"]:active:not(:disabled) {background:#123b28!important;color:#fff!important}
+/* Streamlit wraps button labels in Markdown containers. Inherit the button color. */
+button:is([kind="primary"],[kind="secondary"],[kind="tertiary"]) :is(p,span,[data-testid="stMarkdownContainer"]),
+:is(.stButton,.stDownloadButton,[data-testid="stFileUploaderDropzone"],[data-testid="stCameraInput"]) button :is(p,span,[data-testid="stMarkdownContainer"]) {
+    color:inherit!important;-webkit-text-fill-color:currentColor!important;
+}
+button:focus-visible,[data-baseweb="tab"]:focus-visible,[role="slider"]:focus-visible {
+    outline:3px solid #52734b!important;outline-offset:3px!important;
+}
+:is(.stButton,.stDownloadButton,[data-testid="stFileUploaderDropzone"],[data-testid="stCameraInput"]) button:disabled,
+button[kind]:disabled {
+    background:#e7ebe3!important;color:#65725f!important;border-color:#c4cebd!important;
+    opacity:1!important;box-shadow:none!important;cursor:not-allowed;
+}
+/* Sidebar text, selection fields and their portal-mounted menus. */
+[data-testid="stSidebar"] :is(label,[data-testid="stWidgetLabel"],[data-testid="stMarkdownContainer"]) {color:#203d31}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {color:#586a5c}
+[data-baseweb="select"]>div,[data-baseweb="input"],[data-baseweb="base-input"],[data-baseweb="textarea"] {
+    background:#fff!important;color:#203d31!important;border-color:#a7b7a2!important;
+}
+[data-baseweb="select"]>div:hover {background:#f3f7ed!important;border-color:#52734b!important}
+[data-baseweb="select"]:focus-within,[data-baseweb="input"]:focus-within {
+    outline:2px solid #52734b;outline-offset:2px;border-radius:12px;
+}
+[data-baseweb="select"] :is(span,input,svg) {color:#203d31!important}
+input::placeholder,textarea::placeholder {color:#62735e!important;-webkit-text-fill-color:#62735e!important;opacity:1}
+[data-baseweb="popover"] [data-baseweb="menu"],
+[data-baseweb="popover"] [role="listbox"],
+[role="listbox"] {background:#fff!important;color:#203d31!important;border:1px solid #cad5c1;border-radius:12px}
+[role="option"] {background:#fff!important;color:#203d31!important}
+[role="option"] :is(div,span,p) {color:inherit!important}
+[role="option"]:hover,[role="option"]:focus,[role="option"][aria-selected="true"] {
+    background:#e5efdc!important;color:#193e2b!important;
+}
+[data-baseweb="popover"] li {background:#fff;color:#203d31}
+[data-baseweb="popover"] li:hover {background:#e5efdc!important;color:#193e2b!important}
+[data-baseweb="radio"],[data-baseweb="checkbox"] {color:#203d31!important}
+[data-baseweb="radio"]>div:first-of-type,[data-baseweb="checkbox"]>span:first-of-type {
+    background-color:#fff!important;border-color:#819576!important;
+}
+[data-baseweb="radio"]:has(input:checked)>div:first-of-type,
+[data-baseweb="checkbox"]:has(input:checked)>span:first-of-type {
+    background-color:#245b43!important;border-color:#245b43!important;
+}
+[data-baseweb="radio"]:has(input:checked)>div:first-of-type>div {background-color:#fff!important}
+[data-baseweb="checkbox"]:has(input:checked) svg {color:#fff!important}
+[data-baseweb="radio"]:has(input:focus-visible),[data-baseweb="checkbox"]:has(input:focus-visible) {
+    outline:2px solid #52734b;outline-offset:4px;border-radius:6px;
+}
+[role="slider"] {background:#245b43!important;border:2px solid #fff!important;color:#fff!important;box-shadow:0 0 0 1px #52734b}
+[data-testid="stSliderTickBar"],[data-testid="stSliderThumbValue"] {color:#203d31!important}
+[data-testid="stExpander"] summary {background:#fff!important;color:#203d31!important;border-radius:14px}
+[data-testid="stExpander"] summary:hover {background:#eaf2e2!important;color:#193e2b!important}
+[data-testid="stExpander"] summary :is(p,span,svg) {color:inherit!important}
+[data-testid="stFileUploaderDropzone"] small {color:#586a5c!important}
+[data-baseweb="tab"] {background:transparent!important;color:#405b40!important}
+[data-baseweb="tab"]:hover {background:#dfe9d6!important;color:#193e2b!important}
+[data-baseweb="tab"][aria-selected="true"] {background:#fff!important;color:#214a34!important}
+[data-baseweb="tab"] :is(p,span,[data-testid="stMarkdownContainer"]) {color:inherit!important}
 .topbar {display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px}
 .logo {display:flex;align-items:center;gap:10px;font-weight:800;font-size:.9rem;letter-spacing:.05em}
 .logo-icon {background:var(--green);color:var(--lime);border-radius:12px;width:37px;height:37px;display:grid;place-items:center;font-size:1.5rem}
